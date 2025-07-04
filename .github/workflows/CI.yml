@@ -1,0 +1,102 @@
+# .github/workflows/ci-cd.yml
+# -----------------------------------------------------------------------------
+# CI/CD pipeline for a **Next.js** project deployed to Vercel
+# -----------------------------------------------------------------------------
+# • **Lint** every Pull Request (PR) with ESLint so contributors catch issues
+#   early.
+# • **Deploy** to Vercel **only when** changes land in the `master` branch **and**
+#   the lint job passes.
+#
+#  ✋🏽  PRE‑REQUISITES
+#  ---------------------------------------------------------------------------
+#  1. Generate a Vercel **access token** (Account → Settings → Tokens) and add
+#     it to your GitHub repository secrets as `VERCEL_TOKEN`.
+#  2. Locate your **org** and **project** IDs (run `npx vercel link` locally or
+#     open the `.vercel/project.json` file) and add them as secrets:
+#        • `VERCEL_ORG_ID`
+#        • `VERCEL_PROJECT_ID`
+#  3. Disable Vercel’s automatic Git deployments (via *vercel.json* or the
+#     dashboard) so deployment happens *only* from this workflow.
+#  4. Ensure `npm run lint` exits with non‑zero on problems.
+# -----------------------------------------------------------------------------
+#  🗓️  Updated: 2025‑07‑04 – caching removed for simplicity
+
+name: CI/CD – Vercel
+
+# -----------------------------------------------------------------------------
+# 1️⃣  EVENT TRIGGERS
+# -----------------------------------------------------------------------------
+# • On **pull_request** → run the *lint* job.
+# • On **push** to `master` → run *lint* and, if it succeeds, *deploy*.
+# -----------------------------------------------------------------------------
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [master]
+
+# Cancel redundant runs on the same branch/PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# -----------------------------------------------------------------------------
+# 2️⃣  JOB: LINT – ESLint check (runs for both triggers)
+# -----------------------------------------------------------------------------
+jobs:
+  lint:
+    name: "💅 ESLint"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+  # ---------------------------------------------------------------------------
+  # 3️⃣  JOB: DEPLOY – production deploy via Vercel CLI
+  #    • only fires on push→master  **and**  if lint passed
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: "🚀 Deploy to Vercel (production)"
+    needs: lint
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.deployment_url || '' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Install dependencies (skips postinstall scripts for speed; optional)
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      # --- Deployment ---
+      - name: Deploy with Vercel CLI
+        id: deploy
+        run: |
+          npx vercel --prod \
+            --token "${{ secrets.VERCEL_TOKEN }}" \
+            --scope "${{ secrets.VERCEL_ORG_ID }}" \
+            --confirm
+          echo "deployment_url=$(vercel inspect --token ${{ secrets.VERCEL_TOKEN }} --scope ${{ secrets.VERCEL_ORG_ID }} | grep -m1 'https')" >> $GITHUB_OUTPUT
+
+      - name: Echo deployment URL
+        run: echo "Deployed to ${{ steps.deploy.outputs.deployment_url }}"
